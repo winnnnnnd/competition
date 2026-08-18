@@ -9,12 +9,7 @@
 
 DistributedRAG 是一个基于 Ray、MinIO、PostgreSQL、Milvus 和 MindSpore 构建的分布式 RAG 系统。系统将文件存储、文档解析、OCR/ASR、Chunk、Embedding、向量写入、检索重排和答案引用拆分为独立阶段，并通过确定性 ID、版本发布和任务状态实现重复提交保护与失败恢复。
 
-系统提供两套兼容入口：
-
-1. `main_app1`：MindNLP CPU 模型配置；
-2. `main_app2`：MindSpore Qwen3-Embedding、Qwen3-Reranker 和 Qwen2.5 生成模型配置。
-
-两套入口共享 `rag_core` 中的摄取、存储、检索、引用、容错和可观测实现。
+系统使用统一的 Streamlit 和 REST API 入口。CPU、GPU、NPU 以及 MindNLP、MindSpore 模型差异由配置 Profile 和模型后端决定，不再维护重复的应用目录。
 
 ## ✨ 核心能力
 
@@ -81,31 +76,28 @@ Streamlit / REST API
 
 ```text
 DistributedRAG/
-├── rag_core/
+├── src/distributed_rag/
+│   ├── domain/               # 数据协议、确定性 ID 和错误语义
+│   ├── ingestion/            # 多源解析、Chunk 和流式摄取
+│   ├── retrieval/            # 召回融合、重排、MMR 和可靠引用
+│   ├── infrastructure/       # MinIO、PostgreSQL、Milvus 和指标
+│   ├── distributed/          # Ray Task、Actor Pool 和资源运行时
+│   ├── model_backends/       # MindNLP/MindSpore 模型适配
+│   ├── interfaces/           # REST API 和 Streamlit 界面
 │   ├── config.py             # 环境配置与资源参数
-│   ├── models.py             # Document、Element、Chunk、Citation 协议
-│   ├── ids.py                # checksum 和确定性 ID
-│   ├── storage.py            # MinIO 对象存储适配器
-│   ├── state.py              # PostgreSQL/SQLite Job 与版本状态
-│   ├── parsers.py            # 多源解析与来源定位
-│   ├── chunking.py           # 保留定位信息的 Token Chunk
-│   ├── actors.py             # OCR/ASR/Embedding/Reranker/Writer Actor
-│   ├── ray_tasks.py          # Parser 与 Chunk Remote Task
-│   ├── pipeline.py           # 流式摄取、背压、取消和发布
-│   ├── vector_store.py       # Milvus Schema、批量 upsert 和检索
-│   ├── retrieval.py          # Query/HyDE/Rewrite、RRF、重排和 MMR
-│   ├── citations.py          # 短 ID 引用、校验与 repair
-│   ├── observability.py      # 结构化日志和 Prometheus 指标
-│   ├── service.py            # 统一业务服务
-│   ├── api.py                # REST API
-│   └── ui.py                 # Streamlit UI
-├── main_app1/                # CPU 入口
-├── main_app2/                # MindSpore Qwen 入口和模型实现
-├── tests/                    # 单元、集成和故障注入测试
+│   └── service.py            # 统一业务服务
+├── apps/
+│   └── streamlit_app.py      # 唯一 Streamlit 启动入口
+├── deploy/
+│   ├── compose/              # CPU 与加速设备编排
+│   └── docker/               # 统一应用/Worker 镜像
+├── scripts/                  # 容器入口和 Ray Worker 脚本
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── fault_injection/
 ├── evaluation/               # 固定数据集格式与离线评测脚本
-├── Dockerfiles/              # 应用、Ray Worker 和系统依赖镜像
-├── docker-compose1.yml       # CPU 编排
-├── docker-compose2.yml       # 加速设备编排
+├── pyproject.toml             # Python 包、入口和工具配置
 ├── requirements.txt          # 固定版本运行依赖
 └── requirements-dev.txt      # 测试依赖
 ```
@@ -139,13 +131,13 @@ rag_models_cache/Qwen2_5-1_5B-Instruct
 ### 3. 启动 CPU 配置
 
 ```bash
-docker compose --env-file .env -f docker-compose1.yml up -d --build
+docker compose --env-file .env -f deploy/compose/cpu.yml up -d --build
 ```
 
 ### 4. 启动 Qwen/MindSpore 配置
 
 ```bash
-docker compose --env-file .env -f docker-compose2.yml up -d --build
+docker compose --env-file .env -f deploy/compose/accelerated.yml up -d --build
 ```
 
 ### 5. 访问服务
@@ -196,7 +188,7 @@ RAY_HEAD_ADDRESS=10.0.0.10:6379 \
 RAY_WORKER_CPUS=16 \
 RAY_CUSTOM_RESOURCES='{"NPU":1}' \
 NPU_VISIBLE_DEVICES=0 \
-./Dockerfiles/start-ray-worker.sh
+./scripts/start_ray_worker.sh
 ```
 
 ### Chunk 与批处理
@@ -364,14 +356,14 @@ MILVUS_INDEX_TYPE=HNSW
 
 | 能力 | 代码位置 |
 |---|---|
-| 多源文档解析与原始定位 | `rag_core/parsers.py`、`rag_core/models.py` |
-| MinIO 持久化与确定性路径 | `rag_core/storage.py`、`rag_core/ids.py` |
-| Ray Task、Actor Pool 与背压 | `rag_core/ray_tasks.py`、`rag_core/runtime.py`、`rag_core/pipeline.py` |
-| Job、Stage、版本发布与恢复 | `rag_core/state.py`、`rag_core/pipeline.py` |
-| Embedding 归一化和批量 upsert | `rag_core/actors.py`、`rag_core/vector_store.py` |
-| Query/HyDE/Rewrite 与 RRF | `rag_core/retrieval.py` |
-| 短 ID 引用与服务端校验 | `rag_core/citations.py` |
-| 健康检查、任务接口与指标 | `rag_core/api.py`、`rag_core/observability.py` |
+| 多源文档解析与原始定位 | `src/distributed_rag/ingestion/parsers.py`、`src/distributed_rag/domain/models.py` |
+| MinIO 持久化与确定性路径 | `src/distributed_rag/infrastructure/object_storage.py`、`src/distributed_rag/domain/identifiers.py` |
+| Ray Task、Actor Pool 与背压 | `src/distributed_rag/distributed/`、`src/distributed_rag/ingestion/pipeline.py` |
+| Job、Stage、版本发布与恢复 | `src/distributed_rag/infrastructure/job_store.py`、`src/distributed_rag/ingestion/pipeline.py` |
+| Embedding 归一化和批量 upsert | `src/distributed_rag/distributed/actors.py`、`src/distributed_rag/infrastructure/vector_store.py` |
+| Query/HyDE/Rewrite 与 RRF | `src/distributed_rag/retrieval/engine.py` |
+| 短 ID 引用与服务端校验 | `src/distributed_rag/retrieval/citations.py` |
+| 健康检查、任务接口与指标 | `src/distributed_rag/interfaces/api.py`、`src/distributed_rag/infrastructure/observability.py` |
 | 单元、集成和故障注入用例 | `tests/` |
 | 可重复离线评测 | `evaluation/run_evaluation.py` |
 

@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
-from rag_core.service import DistributedRAGService
+from distributed_rag.service import DistributedRAGService
 
 
 def percentile(values: List[float], fraction: float) -> float:

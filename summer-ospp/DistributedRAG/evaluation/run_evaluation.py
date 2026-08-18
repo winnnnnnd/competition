@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-from rag_core.service import DistributedRAGService
+from distributed_rag.service import DistributedRAGService
 
 
 def load_cases(path: Path) -> List[Dict[str, Any]]:

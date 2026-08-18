@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "distributed-rag"
+version = "2.0.0"
+description = "Distributed, versioned, multi-source document RAG built with Ray, MinIO, PostgreSQL, Milvus, and MindSpore"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "DistributedRAG Contributors"}]
+dynamic = ["dependencies"]
+
+[project.scripts]
+distributed-rag-api = "distributed_rag.interfaces.api:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "integration: requires MinIO, PostgreSQL, Milvus and Ray services",
+  "failure_injection: exercises cancellation, timeout and retry behavior",
+]

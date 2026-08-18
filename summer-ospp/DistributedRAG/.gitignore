@@ -1,0 +1,12 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+rag_models_cache/
+volumes/
+evaluation-results.json
+ingestion-benchmark.json
