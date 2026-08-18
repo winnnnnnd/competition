@@ -1,43 +1,31 @@
-# Dockerfile.set1的构建脚本
-FROM python:3.9-slim
+ARG BASE_IMAGE=python:3.10-slim
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
 
-
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    gcc \
-    libsm6 libxrender1 libxext6 \
+    curl \
+    ffmpeg \
+    fonts-noto-cjk \
     libgl1 \
     libglib2.0-0 \
+    libgomp1 \
+    libreoffice-calc \
+    libreoffice-impress \
+    libreoffice-writer \
+    poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
-COPY . /app/
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
-RUN pip install "streamlit" \
-    "marshmallow~=3.20.0" \
-    "ray[serve]==2.9.3" \
-    "pymilvus==2.4.1" \
-    "boto3" \
-    "botocore" \
-    "sentencepiece" \
-    "tiktoken~=0.8.0" \
-    "PyPDF2~=3.0.1" \
-    "markdown~=3.7" \
-    "beautifulsoup4~=4.12.3" \
-    "rapidocr-onnxruntime" \
-    "Pillow" \
-    "langchain-text-splitters" \
-    "jinja2" \
-    "python-docx" \
-    "python-pptx" \
-    "pandas" \
-    "openai-whisper" \
-    "soundfile" \
-    "duckduckgo-search" \
-    "requests" \
-    -i https://repo.huaweicloud.com/repository/pypi/simple
+COPY . /app
+RUN chmod +x /app/Dockerfiles/entrypoint.sh /app/Dockerfiles/start-ray-worker.sh
 
-EXPOSE 7860
-
-CMD ["streamlit", "run", "main.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.enableCORS=false"]
+EXPOSE 7860 8000 8265 10001
+ENTRYPOINT ["/app/Dockerfiles/entrypoint.sh"]
+CMD ["streamlit", "run", "main_app2/main.py", "--server.port=7860", "--server.address=0.0.0.0"]

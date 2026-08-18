@@ -1,138 +1,162 @@
+x-rag-environment: &rag-environment
+  RAG_PROFILE: cpu
+  RAY_ADDRESS: ray://ray-head:10001
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rag}:${POSTGRES_PASSWORD:-rag-local}@postgres:5432/${POSTGRES_DB:-distributed_rag}
+  MINIO_HOST: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+  MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:-rag-documents}
+  MILVUS_HOST: standalone
+  MILVUS_PORT: "19530"
+  MILVUS_COLLECTION: ${MILVUS_COLLECTION:-distributed_rag_chunks}
+  EMBEDDING_BACKEND: mindnlp
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-base-zh-v1.5}
+  EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+  RERANKER_BACKEND: none
+  LLM_BACKEND: mindnlp
+  LLM_MODEL: ${LLM_MODEL:-openbmb/MiniCPM-2B-dpo-bf16}
+  RAY_MODEL_GPUS: "0"
+  RAY_MODEL_NPUS: "0"
+  PYTHONPATH: /app
+
 services:
   ray-head:
     build:
       context: .
-      dockerfile: ./Dockerfiles/Dockerfile.ray_set1
+      dockerfile: Dockerfiles/Dockerfile.ray_set1
     ports:
       - "8265:8265"
       - "10001:10001"
- 
-    shm_size: '10gb' 
+    shm_size: 4gb
     environment:
-      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
-    command: bash -c "ray start --head --port=6379 --ray-client-server-port=10001 --dashboard-host=0.0.0.0 --num-cpus=4 --block"
-    networks:
-      - rag_net
+      PYTHONPATH: /app
+    command: ray start --head --port=6379 --ray-client-server-port=10001 --dashboard-host=0.0.0.0 --num-cpus=${RAY_HEAD_CPUS:-2} --block
+    networks: [rag_net]
     volumes:
       - ./rag_models_cache:/app/.mindnlp/model
-    
-    
 
   ray-worker:
     build:
       context: .
-      dockerfile: ./Dockerfiles/Dockerfile.ray_set1
-    depends_on:
-      - ray-head
-    shm_size: '10gb'
-    command: ray start --address=ray-head:6379 --num-cpus=8 --block
-    networks:
-      - rag_net
+      dockerfile: Dockerfiles/Dockerfile.ray_set1
+    depends_on: [ray-head]
+    shm_size: 8gb
     environment:
-      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+      RAY_HEAD_ADDRESS: ray-head:6379
+      RAY_WORKER_CPUS: ${RAY_WORKER_CPUS:-8}
+      PYTHONPATH: /app
+    command: /app/Dockerfiles/start-ray-worker.sh
+    networks: [rag_net]
     volumes:
       - ./rag_models_cache:/app/.mindnlp/model
-
 
   main_app:
     build:
       context: .
-      dockerfile: ./Dockerfiles/Dockerfile.set1
+      dockerfile: Dockerfiles/Dockerfile.set1
     ports:
-      - "7860:7860" 
-    volumes:
-      - ./main_app1:/app
-      - ./rag_models_cache:/app/.mindnlp/model
-    environment:
-      - RAY_ADDRESS=ray://ray-head:10001
-      
-      - MINIO_HOST=minio:9000
-      - MINIO_ACCESS_KEY=minioadmin
-      - MINIO_SECRET_KEY=minioadmin
-      - MILVUS_HOST=standalone
-      - MILVUS_PORT=19530
-      - PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
-      
+      - "7860:7860"
+    environment: *rag-environment
     depends_on:
-      standalone:
-        condition: service_healthy
-      ray-head: 
-        condition: service_started
-    networks:
-      - rag_net
-    command: streamlit run main.py --server.port=7860 --server.address=0.0.0.0 --server.enableCORS=false
-    # command: python /app/test.py
+      postgres: {condition: service_healthy}
+      standalone: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      ray-head: {condition: service_started}
+    command: streamlit run main_app1/main.py --server.port=7860 --server.address=0.0.0.0 --server.enableCORS=false
+    networks: [rag_net]
+    volumes:
+      - ./rag_models_cache:/app/.mindnlp/model
 
-  # Milvus, MinIO, ETCD 配置 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfiles/Dockerfile.set1
+    ports:
+      - "8000:8000"
+    environment: *rag-environment
+    depends_on:
+      postgres: {condition: service_healthy}
+      standalone: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      ray-head: {condition: service_started}
+    command: uvicorn rag_core.api:create_app --factory --host 0.0.0.0 --port 8000
+    networks: [rag_net]
+    volumes:
+      - ./rag_models_cache:/app/.mindnlp/model
+
+  postgres:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rag-local}
+      POSTGRES_DB: ${POSTGRES_DB:-distributed_rag}
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [rag_net]
+
   etcd:
-    container_name: rag-etcd
     image: quay.io/coreos/etcd:v3.5.18
     environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
     volumes:
       - ./volumes/etcd:/etcd
-    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir=/etcd
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - rag_net
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [rag_net]
 
   minio:
-    container_name: rag-minio
     image: minio/minio:RELEASE.2023-03-20T20-16-18Z
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     ports:
-      - "9001:9001"
       - "9000:9000"
+      - "9001:9001"
     volumes:
-      - ./volumes/minio:/minio_data
-    command: minio server /minio_data --console-address ":9001"
+      - ./volumes/minio:/data
+    command: minio server /data --console-address :9001
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    networks:
-      - rag_net
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [rag_net]
 
   standalone:
-    container_name: rag-milvus-standalone
     image: milvusdb/milvus:v2.4.1
     command: ["milvus", "run", "standalone"]
-    security_opt:
-      - seccomp:unconfined
+    security_opt: ["seccomp:unconfined"]
     environment:
       ETCD_ENDPOINTS: etcd:2379
       MINIO_ADDRESS: minio:9000
-      MINIO_ACCESS_KEY_ID: minioadmin
-      MINIO_SECRET_KEY_ID: minioadmin
-      MINIO_USE_SSL: "false"
+      MINIO_ACCESS_KEY_ID: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - ./volumes/milvus:/var/lib/milvus
     ports:
       - "19530:19530"
       - "9091:9091"
     depends_on:
-      etcd:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      etcd: {condition: service_healthy}
+      minio: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
-      interval: 30s
-      start_period: 90s
-      timeout: 20s
-      retries: 3
-    networks:
-      - rag_net
+      interval: 10s
+      start_period: 60s
+      timeout: 5s
+      retries: 20
+    networks: [rag_net]
 
 networks:
   rag_net:

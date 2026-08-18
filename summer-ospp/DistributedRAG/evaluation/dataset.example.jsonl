@@ -1,0 +1,1 @@
+{"query":"系统如何避免重复向量？","document_ids":["doc_replace_me"],"relevant_chunk_ids":["ch_replace_me"],"answer_keywords":["确定性主键","upsert"],"expected_source_fields":["page_number"]}

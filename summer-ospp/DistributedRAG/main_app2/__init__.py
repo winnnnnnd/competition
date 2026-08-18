@@ -1,0 +1,1 @@
+"""MindSpore Qwen application profile."""
